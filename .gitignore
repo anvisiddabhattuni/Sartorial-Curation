@@ -1,0 +1,13 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Env / secrets
+.env
+backend/.env
+
+# Runtime data
+backend/data/
+
+# Node handled by frontend/.gitignore
