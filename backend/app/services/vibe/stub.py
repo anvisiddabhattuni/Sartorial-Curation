@@ -2,10 +2,15 @@
 Used when no Gemini key is configured or the API call fails."""
 
 import colorsys
+import re
 from pathlib import Path
 
 from .base import VibeResult, VibeSummarizer
 from .palette import extract_palette
+
+_NEGATORS = {"no", "not", "without", "less", "avoid", "skip", "never"}
+_AFFIRMERS = {"more", "prefer", "add", "want", "with", "some", "like"}
+_SPLIT_RE = re.compile(r",|\band\b|\bbut\b", re.IGNORECASE)
 
 
 def _describe_palette(palette: list[str]) -> tuple[list[str], list[str]]:
@@ -48,6 +53,26 @@ def _describe_palette(palette: list[str]) -> tuple[list[str], list[str]]:
     return tags[:6], terms
 
 
+def _parse_feedback(feedback: str) -> tuple[list[str], list[str]]:
+    """Very lightweight include/exclude parsing for offline refinement, e.g.
+    "no black, more skirts" -> excludes=["black"], includes=["skirts"]."""
+    includes: list[str] = []
+    excludes: list[str] = []
+    for clause in _SPLIT_RE.split(feedback.lower()):
+        words = [w for w in re.split(r"\s+", clause.strip()) if w]
+        if not words:
+            continue
+        if words[0] in _NEGATORS:
+            phrase = " ".join(words[1:]).strip()
+            if phrase:
+                excludes.append(phrase)
+        else:
+            phrase = " ".join(w for w in words if w not in _AFFIRMERS).strip()
+            if phrase:
+                includes.append(phrase)
+    return includes, excludes
+
+
 class StubVibeSummarizer(VibeSummarizer):
     def summarize(self, image_paths: list[Path]) -> VibeResult:
         palette = extract_palette(image_paths)
@@ -64,5 +89,29 @@ class StubVibeSummarizer(VibeSummarizer):
             palette=palette,
             sentence=sentence,
             query_terms=terms,
+            stubbed=True,
+        )
+
+    def refine(self, previous: VibeResult, feedback: str) -> VibeResult:
+        includes, excludes = _parse_feedback(feedback)
+
+        def _keep(phrase: str) -> bool:
+            low = phrase.lower()
+            return not any(x in low for x in excludes)
+
+        tags = [t for t in previous.tags if _keep(t)] + [p for p in includes if p not in previous.tags]
+        terms = [t for t in previous.query_terms if _keep(t)] + [p for p in includes if p not in previous.query_terms]
+
+        sentence = previous.sentence
+        if includes:
+            sentence += " Now leaning into " + ", ".join(includes) + "."
+        if excludes:
+            sentence += " Steering clear of " + ", ".join(excludes) + "."
+
+        return VibeResult(
+            tags=tags[:6] or previous.tags,
+            palette=previous.palette,
+            sentence=sentence,
+            query_terms=terms[:6] or previous.query_terms,
             stubbed=True,
         )

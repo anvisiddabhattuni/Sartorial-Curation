@@ -60,6 +60,63 @@ def _product_text(product: Product) -> str:
     return f"{product.title}. {product.details}. {product.category}"
 
 
+def _rank_and_package(board_id: str, profile: np.ndarray, vibe: VibeResult) -> dict[str, Any]:
+    """Shared by analyze_board and refine_board: search products for the
+    given vibe's query terms, rank them against the given profile vector,
+    and package the shoppable results payload."""
+    settings = get_settings()
+    embedder = get_embedding_provider()
+    store = get_vector_store()
+    provider = get_product_provider()
+
+    candidates = provider.search(vibe.query_terms)
+    by_id = {p.id: p for p in candidates}
+    # Namespaced per board: a live search provider (e.g. SerpAPI) returns a
+    # different, query-dependent candidate set on every call. A namespace
+    # shared across boards/refinements accumulates every candidate set ever
+    # seen, so `store.query(top_k=len(candidates))` can return ids from a
+    # *different* board's leftovers that outrank this board's own freshly
+    # upserted vectors — those get silently dropped by the `by_id` filter
+    # below, potentially zeroing out results entirely. Scoping by board_id
+    # keeps each board's ranking pool isolated. Re-upserting every call (not
+    # gating on a count match) is still correct/necessary on top of this: it
+    # keeps a re-run of the *same* board fresh after a refine changes its
+    # candidate set. Embedding is self-hosted CLIP (no per-call cost).
+    namespace = f"products:{provider.name}:{embedder.key}:{board_id}"
+    texts = [_product_text(p) for p in candidates]
+    vectors = embedder.embed_texts(texts)
+    store.upsert(namespace, [p.id for p in candidates], vectors)
+    logger.info("Indexed %d products into %s", len(candidates), namespace)
+
+    hits = store.query(namespace, profile, top_k=len(candidates))
+
+    # Blend vector similarity with palette affinity, keep top N. results_count
+    # is intentionally larger than a single grid page so the frontend can
+    # reveal more of the same ranked pool ("show more") without another call.
+    scored: list[tuple[float, float, Product]] = []
+    for pid, sim in hits:
+        product = by_id.get(pid)
+        if product is None:
+            continue
+        pal = _palette_affinity(product.color, vibe.palette)
+        scored.append((0.75 * sim + 0.25 * pal, pal, product))
+    scored.sort(key=lambda t: -t[0])
+    top = scored[: settings.results_count]
+
+    products = []
+    for final_score, pal, product in top:
+        entry = product.model_dump()
+        entry["similarity"] = round(float(final_score), 4)
+        entry["why_matched"] = _why_matched(product, vibe, pal)
+        products.append(entry)
+
+    return {
+        "board_id": board_id,
+        "vibe": vibe.to_dict(),
+        "products": products,
+    }
+
+
 def analyze_board(board: Board) -> dict[str, Any]:
     if board.analysis is not None:
         # FR-2.4: re-runs of the same board cost nothing.
@@ -67,8 +124,6 @@ def analyze_board(board: Board) -> dict[str, Any]:
 
     settings = get_settings()
     embedder = get_embedding_provider()
-    store = get_vector_store()
-    provider = get_product_provider()
 
     # 1. Per-image embeddings → board profile (normalized mean).
     image_vecs = embedder.embed_images(board.image_paths)
@@ -88,46 +143,37 @@ def analyze_board(board: Board) -> dict[str, Any]:
         logger.warning("Vibe summarizer failed (%s) — falling back to stub", exc)
         vibe = StubVibeSummarizer().summarize(sampled_paths)
 
-    # 4. Candidate products, embedded (text tower) and ranked by similarity
-    #    to the board profile via the vector store.
-    candidates = provider.search(vibe.query_terms)
-    by_id = {p.id: p for p in candidates}
-    namespace = f"products:{provider.name}:{embedder.key}"
-    # Re-embed and upsert every time rather than gating on a count match:
-    # a live search provider (e.g. SerpAPI) returns a different candidate set
-    # per query, so a stale count coincidentally equal to the new candidate
-    # count would otherwise serve vectors for products that aren't in `by_id`
-    # at all, silently zeroing out the results. Embedding is self-hosted CLIP
-    # (no per-call cost), so there's no reason to risk that for a cache hit.
-    texts = [_product_text(p) for p in candidates]
-    vectors = embedder.embed_texts(texts)
-    store.upsert(namespace, [p.id for p in candidates], vectors)
-    logger.info("Indexed %d products into %s", len(candidates), namespace)
+    # 4. Candidate products, ranked against the board profile.
+    result = _rank_and_package(board.id, profile, vibe)
 
-    hits = store.query(namespace, profile, top_k=len(candidates))
+    board.profile = profile
+    board.vibe = vibe
+    board.analysis = result
+    return result
 
-    # 5. Blend vector similarity with palette affinity, keep top N.
-    scored: list[tuple[float, float, Product]] = []
-    for pid, sim in hits:
-        product = by_id.get(pid)
-        if product is None:
-            continue
-        pal = _palette_affinity(product.color, vibe.palette)
-        scored.append((0.75 * sim + 0.25 * pal, pal, product))
-    scored.sort(key=lambda t: -t[0])
-    top = scored[: settings.results_count]
 
-    products = []
-    for final_score, pal, product in top:
-        entry = product.model_dump()
-        entry["similarity"] = round(float(final_score), 4)
-        entry["why_matched"] = _why_matched(product, vibe, pal)
-        products.append(entry)
+def refine_board(board: Board, feedback: str) -> dict[str, Any]:
+    """Nudge an already-analyzed board's results with free-text feedback
+    ("more colorful", "no black, prefer skirts") without re-touching the
+    source images: text-only vibe refinement (cheap, no vision-LLM call
+    needed) plus a lightweight embedding nudge on the board profile."""
+    if board.profile is None or board.vibe is None:
+        raise ValueError("Board has not been analyzed yet")
 
-    result = {
-        "board_id": board.id,
-        "vibe": vibe.to_dict(),
-        "products": products,
-    }
+    embedder = get_embedding_provider()
+    summarizer = get_vibe_summarizer()
+    try:
+        vibe = summarizer.refine(board.vibe, feedback)
+    except Exception as exc:
+        logger.warning("Vibe refine failed (%s) — falling back to stub", exc)
+        vibe = StubVibeSummarizer().refine(board.vibe, feedback)
+
+    feedback_vec = embedder.embed_texts([feedback])[0]
+    profile = normalize((0.7 * board.profile + 0.3 * feedback_vec)[None, :])[0]
+
+    result = _rank_and_package(board.id, profile, vibe)
+
+    board.profile = profile
+    board.vibe = vibe
     board.analysis = result
     return result

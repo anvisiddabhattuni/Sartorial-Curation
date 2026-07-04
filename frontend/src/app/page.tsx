@@ -4,10 +4,14 @@ import { useState } from "react";
 import UploadDropzone from "@/components/UploadDropzone";
 import VibeCard from "@/components/VibeCard";
 import ProductGrid from "@/components/ProductGrid";
+import RefineBar from "@/components/RefineBar";
+import CartDrawer from "@/components/CartDrawer";
+import { useCart } from "@/lib/cart";
 import {
   analyzeBoard,
   AnalyzeResponse,
   logEvent,
+  refineBoard,
   submitBoard,
 } from "@/lib/api";
 
@@ -26,6 +30,27 @@ export default function Home() {
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [lineIdx, setLineIdx] = useState(0);
+  const [refining, setRefining] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const cart = useCart();
+
+  async function handleRefine(feedback: string) {
+    if (!result) return;
+    setRefining(true);
+    try {
+      const updated = await refineBoard(result.board_id, feedback);
+      setResult(updated);
+      logEvent("results_rendered", {
+        board_id: result.board_id,
+        product_count: updated.products.length,
+        refined: true,
+      });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Couldn't refine those results.");
+    } finally {
+      setRefining(false);
+    }
+  }
 
   async function handleSubmit(files: File[]) {
     setSubmitting(true);
@@ -58,6 +83,28 @@ export default function Home() {
 
   return (
     <main className="flex-1 px-6 py-12 sm:py-16">
+      <button
+        onClick={() => setCartOpen(true)}
+        aria-label="Open Vibe Cart"
+        className="fixed right-6 top-6 z-40 flex items-center gap-2 rounded-full border border-line bg-card px-4 py-2 text-sm shadow-sm hover:border-accent/50"
+      >
+        Vibe Cart
+        {cart.count > 0 && (
+          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1 text-xs text-white">
+            {cart.count}
+          </span>
+        )}
+      </button>
+
+      <CartDrawer
+        open={cartOpen}
+        onClose={() => setCartOpen(false)}
+        groups={cart.groups}
+        total={cart.total}
+        onRemove={cart.remove}
+        onClear={cart.clear}
+      />
+
       <header className="mx-auto mb-12 max-w-3xl text-center">
         <button
           onClick={() => {
@@ -104,7 +151,21 @@ export default function Home() {
       {phase === "results" && result && (
         <section className="mx-auto max-w-6xl animate-fade-up">
           <VibeCard vibe={result.vibe} />
-          <ProductGrid products={result.products} boardId={result.board_id} />
+          <RefineBar onRefine={handleRefine} refining={refining} />
+          <ProductGrid
+            products={result.products}
+            boardId={result.board_id}
+            cartHas={cart.has}
+            onToggleCart={(product) => {
+              cart.toggle(product);
+              logEvent("cart_add", {
+                board_id: result.board_id,
+                product_id: product.id,
+                retailer: product.retailer,
+                price: product.price,
+              });
+            }}
+          />
           <div className="mt-12 text-center">
             <button
               onClick={() => {

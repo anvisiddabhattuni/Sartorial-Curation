@@ -1,12 +1,17 @@
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..events import log_event
-from ..services.pipeline import analyze_board
+from ..services.pipeline import analyze_board, refine_board
 from ..storage import InvalidImageError, create_board, get_board
 
 router = APIRouter(prefix="/boards", tags=["boards"])
+
+
+class RefineIn(BaseModel):
+    feedback: str = Field(min_length=1, max_length=300)
 
 
 @router.post("")
@@ -33,6 +38,22 @@ async def analyze(board_id: str):
         raise HTTPException(status_code=404, detail="Board not found")
     # CPU-bound (embeddings) — keep the event loop free.
     return await run_in_threadpool(analyze_board, board)
+
+
+@router.post("/{board_id}/refine")
+async def refine(board_id: str, body: RefineIn):
+    board = get_board(board_id)
+    if board is None:
+        raise HTTPException(status_code=404, detail="Board not found")
+    if board.analysis is None:
+        raise HTTPException(status_code=400, detail="Board has not been analyzed yet")
+    # CPU-bound (embeddings) — keep the event loop free.
+    result = await run_in_threadpool(refine_board, board, body.feedback)
+    log_event(
+        "results_rendered",
+        {"board_id": board_id, "product_count": len(result["products"]), "refined": True},
+    )
+    return result
 
 
 @router.get("/{board_id}")

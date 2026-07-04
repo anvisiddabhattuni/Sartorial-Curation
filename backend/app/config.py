@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     max_images: int = 30
     max_image_px: int = 768  # downscale cap before processing
     vibe_sample_size: int = 6  # images sent to the vision-LLM
-    results_count: int = 16
+    results_count: int = 40  # ranked pool size; frontend pages through it via "show more"
 
     # Frontend origin for CORS
     frontend_origin: str = "http://localhost:3000"

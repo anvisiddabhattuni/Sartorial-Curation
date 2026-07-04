@@ -23,6 +23,23 @@ Return ONLY a JSON object with exactly these keys:
 
 LOW_DETAIL_PX = 512  # cost control: downscale before sending to the vision-LLM
 
+REFINE_PROMPT = """You are a fashion stylist refining a mood board summary based on
+a user's follow-up feedback. You already described the board as:
+- tags: {tags}
+- sentence: "{sentence}"
+- search terms: {query_terms}
+
+The user now says: "{feedback}"
+
+Update the summary to honor that feedback (add what they asked for, drop anything
+they said no to) while keeping the parts of the original vibe they didn't object to.
+
+Return ONLY a JSON object with exactly these keys:
+- "tags": 4-6 short lowercase aesthetic tags
+- "sentence": one warm, specific sentence (max 25 words) describing the updated style
+- "query_terms": 4-6 concrete product search queries matching the updated vibe
+"""
+
 
 class GeminiVibeSummarizer(VibeSummarizer):
     def __init__(self, api_key: str, model: str) -> None:
@@ -63,3 +80,31 @@ class GeminiVibeSummarizer(VibeSummarizer):
         if not palette:
             palette = extract_palette(image_paths)
         return VibeResult(tags=tags, palette=palette, sentence=sentence, query_terms=query_terms)
+
+    def refine(self, previous: VibeResult, feedback: str) -> VibeResult:
+        from google.genai import types
+
+        prompt = REFINE_PROMPT.format(
+            tags=", ".join(previous.tags),
+            sentence=previous.sentence,
+            query_terms=", ".join(previous.query_terms),
+            feedback=feedback,
+        )
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.4,
+            ),
+        )
+        data = json.loads(response.text)
+
+        tags = [str(t) for t in data.get("tags", [])][:6]
+        sentence = str(data.get("sentence", "")).strip()
+        query_terms = [str(q) for q in data.get("query_terms", [])][:6]
+        if not tags or not sentence or not query_terms:
+            raise ValueError(f"Gemini returned incomplete refine JSON: {data}")
+        # Palette reflects the board's actual photos, which haven't changed —
+        # keep it rather than let a text-only call invent new colors.
+        return VibeResult(tags=tags, palette=previous.palette, sentence=sentence, query_terms=query_terms)

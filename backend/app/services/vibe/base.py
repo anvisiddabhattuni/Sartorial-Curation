@@ -29,3 +29,9 @@ class VibeSummarizer(ABC):
 
     @abstractmethod
     def summarize(self, image_paths: list[Path]) -> VibeResult: ...
+
+    @abstractmethod
+    def refine(self, previous: VibeResult, feedback: str) -> VibeResult:
+        """Fold free-text user feedback ("more colorful", "no black") into an
+        already-computed vibe. Text-only — no images re-sent, since the board's
+        actual palette/photos haven't changed, only how we search/describe."""

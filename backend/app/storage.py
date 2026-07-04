@@ -4,12 +4,15 @@ in memory so re-runs of the same board are free."""
 
 import shutil
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
+
+from .services.vibe.base import VibeResult
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 BOARDS_DIR = DATA_DIR / "boards"
@@ -22,7 +25,9 @@ class Board:
     id: str
     image_paths: list[Path]
     analysis: dict[str, Any] | None = None
-    results: list[dict[str, Any]] = field(default_factory=list)
+    # Cached so /refine can nudge toward new feedback without re-embedding images.
+    profile: np.ndarray | None = None
+    vibe: VibeResult | None = None
 
 
 _boards: dict[str, Board] = {}

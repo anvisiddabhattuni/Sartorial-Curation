@@ -49,6 +49,22 @@ export async function analyzeBoard(boardId: string): Promise<AnalyzeResponse> {
   return res.json();
 }
 
+export async function refineBoard(
+  boardId: string,
+  feedback: string
+): Promise<AnalyzeResponse> {
+  const res = await fetch(`${API_URL}/boards/${boardId}/refine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ feedback }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `Refine failed (${res.status})`);
+  }
+  return res.json();
+}
+
 export function logEvent(name: string, properties: Record<string, unknown> = {}) {
   // Fire-and-forget; instrumentation must never break the flow.
   fetch(`${API_URL}/events`, {
