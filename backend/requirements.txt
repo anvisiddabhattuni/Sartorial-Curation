@@ -9,3 +9,4 @@ pgvector==0.3.6
 google-genai==1.2.0
 torch>=2.6,<3
 transformers>=4.47,<5
+certifi>=2024.7.4

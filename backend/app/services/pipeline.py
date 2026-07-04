@@ -90,11 +90,16 @@ def analyze_board(board: Board) -> dict[str, Any]:
     candidates = provider.search(vibe.query_terms)
     by_id = {p.id: p for p in candidates}
     namespace = f"products:{provider.name}:{embedder.key}"
-    if store.count(namespace) != len(candidates):
-        texts = [_product_text(p) for p in candidates]
-        vectors = embedder.embed_texts(texts)
-        store.upsert(namespace, [p.id for p in candidates], vectors)
-        logger.info("Indexed %d products into %s", len(candidates), namespace)
+    # Re-embed and upsert every time rather than gating on a count match:
+    # a live search provider (e.g. SerpAPI) returns a different candidate set
+    # per query, so a stale count coincidentally equal to the new candidate
+    # count would otherwise serve vectors for products that aren't in `by_id`
+    # at all, silently zeroing out the results. Embedding is self-hosted CLIP
+    # (no per-call cost), so there's no reason to risk that for a cache hit.
+    texts = [_product_text(p) for p in candidates]
+    vectors = embedder.embed_texts(texts)
+    store.upsert(namespace, [p.id for p in candidates], vectors)
+    logger.info("Indexed %d products into %s", len(candidates), namespace)
 
     hits = store.query(namespace, profile, top_k=len(candidates))
 

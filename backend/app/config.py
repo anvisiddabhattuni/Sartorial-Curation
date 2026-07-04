@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Keys / connections
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash-lite"
     serpapi_api_key: str = ""
     database_url: str = "postgresql://localhost:5432/muse"
 

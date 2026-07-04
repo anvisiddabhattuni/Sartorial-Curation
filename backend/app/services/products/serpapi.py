@@ -7,14 +7,22 @@ import hashlib
 import json
 import logging
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
+import certifi
+
 from .base import Product, ProductSearchProvider
 
 logger = logging.getLogger("muse.products.serpapi")
+
+# Some Python builds (notably python.org installers on macOS) don't wire up
+# the system trust store for urllib, so HTTPS requests fail with
+# CERTIFICATE_VERIFY_FAILED. Use certifi's bundle explicitly.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
     ("dresses", ["dress", "gown", "slip dress", "midi dress"]),
@@ -70,7 +78,7 @@ class SerpApiProductProvider(ProductSearchProvider):
         )
         url = f"https://serpapi.com/search.json?{params}"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as resp:
             return json.loads(resp.read()).get("shopping_results", [])
 
     def _to_product(self, item: dict[str, Any]) -> Product | None:
