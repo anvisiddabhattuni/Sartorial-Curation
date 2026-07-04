@@ -81,7 +81,7 @@ class SerpApiProductProvider(ProductSearchProvider):
         with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as resp:
             return json.loads(resp.read()).get("shopping_results", [])
 
-    def _to_product(self, item: dict[str, Any]) -> Product | None:
+    def _to_product(self, item: dict[str, Any], query: str) -> Product | None:
         title = str(item.get("title") or "").strip()
         link = str(item.get("link") or item.get("product_link") or "").strip()
         if not title or not link:
@@ -101,6 +101,7 @@ class SerpApiProductProvider(ProductSearchProvider):
             buy_link=link,
             details=str(item.get("snippet") or item.get("description") or title),
             category=_infer_category(title),
+            source_query=query,
         )
 
     def search(self, queries: list[str], filters: dict[str, Any] | None = None) -> list[Product]:
@@ -113,7 +114,7 @@ class SerpApiProductProvider(ProductSearchProvider):
                 logger.warning("SerpAPI query %r failed (%s)", query, exc)
                 continue
             for item in items:
-                product = self._to_product(item)
+                product = self._to_product(item, query)
                 if product is None or product.id in seen:
                     continue
                 seen.add(product.id)

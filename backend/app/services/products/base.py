@@ -15,6 +15,7 @@ class Product(BaseModel):
     details: str
     category: str  # tops | bottoms | outerwear | dresses | shoes | accessories
     color: str = ""  # hex, used for palette matching / mock imagery
+    source_query: str = ""  # vibe-derived search term that surfaced this item, if any
 
 
 class ProductSearchProvider(ABC):

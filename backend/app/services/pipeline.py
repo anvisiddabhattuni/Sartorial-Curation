@@ -49,7 +49,10 @@ def _why_matched(product: Product, vibe: VibeResult, palette_score: float) -> li
     if palette_score > 0.82:
         reasons.append("palette match")
     if not reasons:
-        reasons.append("overall vibe")
+        # Real product titles rarely echo the exact vibe-tag wording, but
+        # for API-sourced items we still know which vibe-derived search term
+        # surfaced them — a more specific fallback than a generic phrase.
+        reasons.append(product.source_query or "overall vibe")
     return reasons[:3]
 
 
