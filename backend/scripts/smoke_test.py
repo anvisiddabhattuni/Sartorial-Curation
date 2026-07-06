@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
-"""Smoke test for the Muse demo pipeline. Run with the API up on :8000.
+"""Smoke test for the Muse demo pipeline. Run with the API up on :8000, or
+point at a deployed environment via MUSE_API_URL.
 
 Usage:
     cd backend && .venv/bin/python scripts/smoke_test.py
+    MUSE_API_URL=https://muse-backend.up.railway.app .venv/bin/python scripts/smoke_test.py
 """
 
 from __future__ import annotations
 
 import io
 import json
+import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
 
+import certifi
 from PIL import Image
 
-API = "http://localhost:8000"
+API = os.environ.get("MUSE_API_URL", "http://localhost:8000")
 MIN_PRODUCTS = 12
+# Some Python builds (notably python.org installers on macOS) don't wire up
+# the system trust store for urllib — same fix as products/serpapi.py.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 def _health() -> None:
-    with urllib.request.urlopen(f"{API}/health", timeout=5) as resp:
+    with urllib.request.urlopen(f"{API}/health", timeout=5, context=_SSL_CONTEXT) as resp:
         data = json.loads(resp.read())
     assert data.get("status") == "ok", data
 
@@ -46,13 +53,15 @@ def _upload_board() -> str:
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_SSL_CONTEXT) as resp:
         return json.loads(resp.read())["board_id"]
 
 
 def _analyze(board_id: str) -> dict:
     req = urllib.request.Request(f"{API}/boards/{board_id}/analyze", method="POST")
-    with urllib.request.urlopen(req, timeout=180) as resp:
+    # Generous timeout: a cold deploy may still be repairing/downloading the
+    # FashionCLIP checkpoint on its first request.
+    with urllib.request.urlopen(req, timeout=300, context=_SSL_CONTEXT) as resp:
         return json.loads(resp.read())
 
 
