@@ -24,7 +24,12 @@ def init_events(database_url: str) -> None:
     try:
         import psycopg
 
-        _pg_conn = psycopg.connect(database_url, autocommit=True)
+        # prepare_threshold=None: disable server-side prepared statements.
+        # Required for compatibility with PgBouncer/Supavisor in transaction
+        # pooling mode (e.g. Supabase's pooler) — without this, statements
+        # prepared on one pooled backend connection can be invoked against a
+        # different one and fail with "prepared statement does not exist".
+        _pg_conn = psycopg.connect(database_url, autocommit=True, prepare_threshold=None)
         _pg_conn.execute(
             """
             CREATE TABLE IF NOT EXISTS events (

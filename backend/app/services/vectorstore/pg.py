@@ -10,7 +10,9 @@ class PgVectorStore(VectorStore):
     or extension is unavailable — the factory catches that and falls back."""
 
     def __init__(self, database_url: str, dim: int) -> None:
-        self._conn = psycopg.connect(database_url, autocommit=True)
+        # prepare_threshold=None: required for compatibility with PgBouncer/
+        # Supavisor transaction pooling (e.g. Supabase's pooler) — see events.py.
+        self._conn = psycopg.connect(database_url, autocommit=True, prepare_threshold=None)
         self._conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         register_vector(self._conn)
         self._conn.execute(
