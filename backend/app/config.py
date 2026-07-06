@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     # Public base URL of this API (used for locally-served mock product images)
     api_base_url: str = "http://localhost:8000"
 
+    # Per-IP rate limits (protects against one client hammering the API).
+    upload_rate_limit: int = 15  # POST /boards per window
+    analyze_rate_limit: int = 8  # analyze + refine per window (these cost $)
+    rate_limit_window_seconds: int = 3600
+
+    # Daily ceilings on calls to metered APIs, shared across all clients.
+    # <=0 disables the cap. Tune these to your actual Gemini/SerpAPI plan —
+    # SerpAPI free/hobby tiers are often monthly-limited, so a low daily
+    # number that spreads the monthly quota out is safer than a high one.
+    gemini_daily_limit: int = 300
+    serpapi_daily_limit: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:

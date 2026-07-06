@@ -1,20 +1,27 @@
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..events import log_event
+from ..ratelimit import RateLimiter, rate_limit_dependency
 from ..services.pipeline import analyze_board, refine_board
 from ..storage import InvalidImageError, create_board, get_board
 
 router = APIRouter(prefix="/boards", tags=["boards"])
+
+_settings = get_settings()
+# Analyze/refine are stricter — those are the calls that cost real money
+# (Gemini + SerpAPI). Upload itself is free, just disk/CPU, so it's lenient.
+_upload_limiter = RateLimiter(_settings.upload_rate_limit, _settings.rate_limit_window_seconds)
+_analyze_limiter = RateLimiter(_settings.analyze_rate_limit, _settings.rate_limit_window_seconds)
 
 
 class RefineIn(BaseModel):
     feedback: str = Field(min_length=1, max_length=300)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(rate_limit_dependency(_upload_limiter, "upload"))])
 async def submit_board(files: list[UploadFile]):
     settings = get_settings()
     if len(files) < settings.min_images or len(files) > settings.max_images:
@@ -31,7 +38,9 @@ async def submit_board(files: list[UploadFile]):
     return {"board_id": board.id, "image_count": len(board.image_paths)}
 
 
-@router.post("/{board_id}/analyze")
+@router.post(
+    "/{board_id}/analyze", dependencies=[Depends(rate_limit_dependency(_analyze_limiter, "analyze"))]
+)
 async def analyze(board_id: str):
     board = get_board(board_id)
     if board is None:
@@ -40,7 +49,9 @@ async def analyze(board_id: str):
     return await run_in_threadpool(analyze_board, board)
 
 
-@router.post("/{board_id}/refine")
+@router.post(
+    "/{board_id}/refine", dependencies=[Depends(rate_limit_dependency(_analyze_limiter, "refine"))]
+)
 async def refine(board_id: str, body: RefineIn):
     board = get_board(board_id)
     if board is None:

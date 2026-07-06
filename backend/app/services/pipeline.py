@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from ..budget import DailyBudget
 from ..config import get_settings
 from ..storage import Board
 from .embeddings import get_embedding_provider
@@ -19,6 +20,13 @@ from .vibe.stub import StubVibeSummarizer
 logger = logging.getLogger("muse.pipeline")
 
 _STOPWORDS = {"the", "a", "an", "and", "with", "in", "of", "for", "to"}
+
+_settings = get_settings()
+# Shared across every request in this process: protects the deployment's
+# actual Gemini/SerpAPI quota from a traffic spike, independent of the
+# per-IP rate limits in routers/boards.py (which only stop one client).
+_gemini_budget = DailyBudget("gemini", _settings.gemini_daily_limit)
+_serpapi_budget = DailyBudget("serpapi", _settings.serpapi_daily_limit)
 
 
 def _hex_to_rgb(hex_color: str) -> np.ndarray:
@@ -60,6 +68,12 @@ def _product_text(product: Product) -> str:
     return f"{product.title}. {product.details}. {product.category}"
 
 
+def _is_gemini(summarizer: object) -> bool:
+    from .vibe.gemini import GeminiVibeSummarizer
+
+    return isinstance(summarizer, GeminiVibeSummarizer)
+
+
 def _rank_and_package(board_id: str, profile: np.ndarray, vibe: VibeResult) -> dict[str, Any]:
     """Shared by analyze_board and refine_board: search products for the
     given vibe's query terms, rank them against the given profile vector,
@@ -68,6 +82,11 @@ def _rank_and_package(board_id: str, profile: np.ndarray, vibe: VibeResult) -> d
     embedder = get_embedding_provider()
     store = get_vector_store()
     provider = get_product_provider()
+    if provider.name == "serpapi" and not _serpapi_budget.try_consume():
+        from .products.mock import MockProductProvider
+
+        logger.warning("SerpAPI daily budget exhausted — serving the mock catalog instead")
+        provider = MockProductProvider(settings.api_base_url)
 
     candidates = provider.search(vibe.query_terms)
     by_id = {p.id: p for p in candidates}
@@ -137,11 +156,15 @@ def analyze_board(board: Board) -> dict[str, Any]:
 
     # 3. "Your Vibe" summary. A live LLM failure must not kill the pipeline.
     summarizer = get_vibe_summarizer()
-    try:
-        vibe = summarizer.summarize(sampled_paths)
-    except Exception as exc:
-        logger.warning("Vibe summarizer failed (%s) — falling back to stub", exc)
+    if _is_gemini(summarizer) and not _gemini_budget.try_consume():
+        logger.warning("Gemini daily budget exhausted — serving the stub vibe summary instead")
         vibe = StubVibeSummarizer().summarize(sampled_paths)
+    else:
+        try:
+            vibe = summarizer.summarize(sampled_paths)
+        except Exception as exc:
+            logger.warning("Vibe summarizer failed (%s) — falling back to stub", exc)
+            vibe = StubVibeSummarizer().summarize(sampled_paths)
 
     # 4. Candidate products, ranked against the board profile.
     result = _rank_and_package(board.id, profile, vibe)
@@ -162,11 +185,15 @@ def refine_board(board: Board, feedback: str) -> dict[str, Any]:
 
     embedder = get_embedding_provider()
     summarizer = get_vibe_summarizer()
-    try:
-        vibe = summarizer.refine(board.vibe, feedback)
-    except Exception as exc:
-        logger.warning("Vibe refine failed (%s) — falling back to stub", exc)
+    if _is_gemini(summarizer) and not _gemini_budget.try_consume():
+        logger.warning("Gemini daily budget exhausted — serving the stub refine instead")
         vibe = StubVibeSummarizer().refine(board.vibe, feedback)
+    else:
+        try:
+            vibe = summarizer.refine(board.vibe, feedback)
+        except Exception as exc:
+            logger.warning("Vibe refine failed (%s) — falling back to stub", exc)
+            vibe = StubVibeSummarizer().refine(board.vibe, feedback)
 
     feedback_vec = embedder.embed_texts([feedback])[0]
     profile = normalize((0.7 * board.profile + 0.3 * feedback_vec)[None, :])[0]
