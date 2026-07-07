@@ -46,8 +46,14 @@ class GeminiVibeSummarizer(VibeSummarizer):
         if not api_key:
             raise ValueError("GEMINI_API_KEY is not set")
         from google import genai
+        from google.genai import types
 
-        self._client = genai.Client(api_key=api_key)
+        # The SDK has no default timeout — an occasional stall on Gemini's
+        # end would otherwise hang analyze_board forever, since a hang isn't
+        # an exception the pipeline's stub-fallback try/except can catch.
+        self._client = genai.Client(
+            api_key=api_key, http_options=types.HttpOptions(timeout=20_000)
+        )
         self._model = model
 
     def summarize(self, image_paths: list[Path]) -> VibeResult:
